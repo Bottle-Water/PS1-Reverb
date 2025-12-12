@@ -1,4 +1,7 @@
 //
+// TODO: disable or fix half echo. fix resonant frequencies
+// TODO: https://melatonin.dev/blog/pluginval-is-a-plugin-devs-best-friend/
+//
 //  Reverb.cpp
 //  Ps1Reverb
 //
