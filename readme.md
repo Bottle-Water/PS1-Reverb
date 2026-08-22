@@ -21,7 +21,7 @@ Taken directly from the SPU:
 
 Dry, then the same source through `Hall`:
 
-
+https://github.com/user-attachments/assets/d9ac4d21-672c-495a-b39b-1d8a6a5b2b5c
 
 ## Build
 
