@@ -8,7 +8,7 @@ Built from nocash's SPU notes,
 also mirrored at
 [psx-spx](https://psx-spx.consoledev.net/soundprocessingunitspu/).
 
-![Ps1Verb](PS1Verb.png)
+<img src="PS1Verb.png" alt="Ps1Verb" width="420">
 
 ## Presets
 
