@@ -139,6 +139,8 @@ private:
     bool halfRatePhase = false;   // run reverb core every other sample
     float lastWetL = 0.0f;
     float lastWetR = 0.0f;
+    float previousWetL = 0.0f;
+    float previousWetR = 0.0f;
 
     // User params + state for the extensions
     UserParams params;

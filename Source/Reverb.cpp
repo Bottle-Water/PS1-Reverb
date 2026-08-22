@@ -1,6 +1,4 @@
 //
-// TODO: https://melatonin.dev/blog/pluginval-is-a-plugin-devs-best-friend/
-//
 //  Reverb.cpp
 //  Ps1Reverb
 //
@@ -45,6 +43,8 @@ void Reverb::reset()
     halfRatePhase = false;
     lastWetL = 0.0f;
     lastWetR = 0.0f;
+    previousWetL = 0.0f;
+    previousWetR = 0.0f;
 
     std::fill(preDelayL.begin(), preDelayL.end(), 0.0f);
     std::fill(preDelayR.begin(), preDelayR.end(), 0.0f);
@@ -401,13 +401,21 @@ void Reverb::processStereo(float& leftIn, float& rightIn, float& leftOut, float&
         const int16_t wetOutL = mulQ15(Lout, regs.vLOUT);
         const int16_t wetOutR = mulQ15(Rout, regs.vROUT);
 
-        wetL = s16ToFloat(wetOutL);
-        wetR = s16ToFloat(wetOutR);
-
-        lastWetL = wetL;
-        lastWetR = wetR;
+        previousWetL = lastWetL;
+        previousWetR = lastWetR;
+        lastWetL = s16ToFloat(wetOutL);
+        lastWetR = s16ToFloat(wetOutR);
+        wetL = previousWetL;
+        wetR = previousWetR;
 
         bufferPos = (bufferPos + 1) % (int)leftBuffer.size();
+    }
+    else
+    {
+        // Reconstruct the half-rate core at the host rate with a linear
+        // midpoint instead of holding the previous core output.
+        wetL = 0.5f * (previousWetL + lastWetL);
+        wetR = 0.5f * (previousWetR + lastWetR);
     }
 
     // Output gain + stereo width
