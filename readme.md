@@ -10,7 +10,7 @@ Built from nocash's SPU notes,
 
 <img src="PS1Verb.png" alt="Ps1Verb" width="420">
 
-Additionally to the PS1 base reverb, this also allows you to mix the input and output levels, as well as stereo width, pre-delay, and dampening.
+In addition to the PS1 base reverb, this plugin also allows you to mix the input and output levels, as well as stereo width, pre-delay, and dampening.
 
 ## Presets
 
