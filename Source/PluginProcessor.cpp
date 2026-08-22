@@ -7,7 +7,6 @@
 */
 
 #include "PluginProcessor.h"
-#include "PluginEditor.h"
 
 //==============================================================================
 Ps1VerbAudioProcessor::Ps1VerbAudioProcessor()
@@ -64,7 +63,8 @@ bool Ps1VerbAudioProcessor::isMidiEffect() const
 
 double Ps1VerbAudioProcessor::getTailLengthSeconds() const
 {
-    return 0.0;
+    // Long enough to cover the decay of the largest presets (Space Echo / Hall).
+    return 3.0;
 }
 
 int Ps1VerbAudioProcessor::getNumPrograms()
@@ -140,16 +140,37 @@ Ps1VerbAudioProcessor::createParameterLayout()
     layout.add(std::make_unique<juce::AudioParameterChoice>(
         juce::ParameterID("Preset", 1),
         "Preset",
-        juce::StringArray{"Room", "Studio Small", "Studio Medium", "Studio Large", "Hall", "Half Echo", "Space Echo", "Chaos Echo", "Delay", "Sanity"},
-        0  // Default to Room (index 1)
+        juce::StringArray{"Room", "Studio Small", "Studio Medium", "Studio Large", "Hall", "Half Echo", "Space Echo", "Chaos Echo", "Delay"},
+        4  // Default to Hall (index 4)
     ));
-    
+
     layout.add(std::make_unique<juce::AudioParameterFloat>(
        juce::ParameterID("mix", 1),
        "Mix",
-        juce::NormalisableRange<float>(0.0f, 1.0f, 0.1f),
-        1.0));
-    
+        juce::NormalisableRange<float>(0.0f, 1.0f),
+        1.0f));
+
+    // Safe extensions (scale existing values / sit outside the SPU model)
+    layout.add(std::make_unique<juce::AudioParameterFloat>(
+        juce::ParameterID("inGain", 1), "Input",
+        juce::NormalisableRange<float>(0.0f, 2.0f), 1.0f));
+
+    layout.add(std::make_unique<juce::AudioParameterFloat>(
+        juce::ParameterID("outGain", 1), "Output",
+        juce::NormalisableRange<float>(0.0f, 2.0f), 1.0f));
+
+    layout.add(std::make_unique<juce::AudioParameterFloat>(
+        juce::ParameterID("width", 1), "Width",
+        juce::NormalisableRange<float>(0.0f, 2.0f), 1.0f));
+
+    layout.add(std::make_unique<juce::AudioParameterFloat>(
+        juce::ParameterID("preDelay", 1), "Pre-Delay",
+        juce::NormalisableRange<float>(0.0f, 200.0f), 0.0f));
+
+    layout.add(std::make_unique<juce::AudioParameterFloat>(
+        juce::ParameterID("hfDamp", 1), "HF Damp",
+        juce::NormalisableRange<float>(0.0f, 1.0f), 0.0f));
+
     return layout;
 }
 
@@ -181,24 +202,29 @@ void Ps1VerbAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce
         lastPreset = preset;
     }
 
-    auto* leftChannel = buffer.getWritePointer(0);
-    auto* rightChannel = buffer.getWritePointer(1);
-    
+    Reverb::UserParams up;
+    up.inGain     = apvts.getRawParameterValue("inGain")->load();
+    up.outGain    = apvts.getRawParameterValue("outGain")->load();
+    up.width      = apvts.getRawParameterValue("width")->load();
+    up.preDelayMs = apvts.getRawParameterValue("preDelay")->load();
+    up.hfDamp     = apvts.getRawParameterValue("hfDamp")->load();
+    reverb.setUserParams(up);
+
+    auto* leftChannel  = buffer.getWritePointer(0);
+    // Support a mono main bus: fall back to the left channel for the right.
+    auto* rightChannel = totalNumInputChannels > 1 ? buffer.getWritePointer(1) : leftChannel;
+
     for (int sample = 0; sample < buffer.getNumSamples(); ++sample)
     {
         float leftOut, rightOut;
-        
+
         reverb.processStereo(leftChannel[sample], rightChannel[sample], leftOut, rightOut);
-        
-        
-        float left = (1.0f - mix) * leftChannel[sample] + mix * leftOut;
-        float right = (1.0f - mix) * rightChannel[sample] + mix * rightOut;
-        
-        
-        leftChannel[sample] = left;
+
+        const float left  = (1.0f - mix) * leftChannel[sample]  + mix * leftOut;
+        const float right = (1.0f - mix) * rightChannel[sample] + mix * rightOut;
+
+        leftChannel[sample]  = left;
         rightChannel[sample] = right;
-        
-        
     }
 }
 
@@ -210,23 +236,22 @@ bool Ps1VerbAudioProcessor::hasEditor() const
 
 juce::AudioProcessorEditor* Ps1VerbAudioProcessor::createEditor()
 {
-//    return new Ps1VerbAudioProcessorEditor (*this);
     return new juce::GenericAudioProcessorEditor (*this);
-
 }
 
 //==============================================================================
 void Ps1VerbAudioProcessor::getStateInformation (juce::MemoryBlock& destData)
 {
-    // You should use this method to store your parameters in the memory block.
-    // You could do that either as raw data, or use the XML or ValueTree classes
-    // as intermediaries to make it easy to save and load complex data.
+    // Persist the full APVTS (preset choice + mix) with the host session.
+    if (auto xml = apvts.copyState().createXml())
+        copyXmlToBinary (*xml, destData);
 }
 
 void Ps1VerbAudioProcessor::setStateInformation (const void* data, int sizeInBytes)
 {
-    // You should use this method to restore your parameters from this memory block,
-    // whose contents will have been created by the getStateInformation() call.
+    if (auto xml = getXmlFromBinary (data, sizeInBytes))
+        if (xml->hasTagName (apvts.state.getType()))
+            apvts.replaceState (juce::ValueTree::fromXml (*xml));
 }
 
 //==============================================================================

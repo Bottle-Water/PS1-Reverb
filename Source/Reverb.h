@@ -22,8 +22,38 @@ public:
 
     void loadPreset(const std::string& presetName);
 
+    // User-facing controls
+    struct UserParams
+    {
+        float inGain    = 1.0f; // linear, scales reverb input
+        float outGain   = 1.0f; // linear, scales wet output
+        float width     = 1.0f; // 0 = mono, 1 = normal, 2 = wide
+        float preDelayMs = 0.0f; // dry-to-reverb pre-delay
+        float hfDamp     = 0.0f; // 0 = off, 1 = max tail damping
+    };
+    void setUserParams(const UserParams& p);
+    struct RegReadout
+    {
+        juce::String name; // loaded preset name
+
+        // Gains (Q15 signed)
+        int16_t vIIR = 0, vWALL = 0;
+        int16_t vCOMB1 = 0, vCOMB2 = 0, vCOMB3 = 0, vCOMB4 = 0;
+        int16_t vAPF1 = 0, vAPF2 = 0;
+        int16_t vLIN = 0, vRIN = 0, vLOUT = 0, vROUT = 0;
+
+        // Delay offsets
+        int dAPF1 = 0, dAPF2 = 0;
+        int mLSAME1 = 0, mRSAME1 = 0, mLDIFF1 = 0, mRDIFF1 = 0;
+        int mLCOMB1 = 0, mLCOMB2 = 0, mLCOMB3 = 0, mLCOMB4 = 0;
+        int mLAPF1 = 0, mLAPF2 = 0;
+
+        double coreRate = 22050.0; // offsets/coreRate -> seconds
+    };
+
+    RegReadout getRegisterReadout() const noexcept;
+
 private:
-    // True SPU-style reverb register model (interpreted as sample offsets in this implementation).
     struct ReverbRegs
     {
         // Q15 volumes (signed)
@@ -96,8 +126,10 @@ private:
 
     ReverbRegs regs {};
     ParamsFloat paramsFloat {};
+    juce::String currentPresetName;
 
     // delay buffers (16-bit)
+    static constexpr int maxBufferSize = 1 << 18;
     std::vector<int16_t> leftBuffer;
     std::vector<int16_t> rightBuffer;
     int bufferPos = 0;
@@ -107,6 +139,20 @@ private:
     bool halfRatePhase = false;   // run reverb core every other sample
     float lastWetL = 0.0f;
     float lastWetR = 0.0f;
+
+    // User params + state for the extensions
+    UserParams params;
+
+    // Pre-delay ring (host rate)
+    std::vector<float> preDelayL, preDelayR;
+    int preDelayPos = 0;
+    int preDelaySize = 1;
+    int preDelaySamples = 0;
+
+    // HF damping one-pole state on the same-side feedback
+    float dampL = 0.0f, dampR = 0.0f;
+
+    int addrScale() const noexcept; // sample rate address scale
 
     // Preset loader (maps consoledev tables into SPU regs)
     void loaderSpuRegs(const uint16_t preset[32]);

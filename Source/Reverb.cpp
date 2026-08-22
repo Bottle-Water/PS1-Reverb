@@ -1,5 +1,4 @@
 //
-// TODO: disable or fix half echo. fix resonant frequencies
 // TODO: https://melatonin.dev/blog/pluginval-is-a-plugin-devs-best-friend/
 //
 //  Reverb.cpp
@@ -15,16 +14,24 @@
 
 Reverb::Reverb()
 {
-    loadPreset("Room");
+    loadPreset("Hall");
 }
 
 void Reverb::prepare(double newSampleRate, int /*samplesPerBlock*/)
 {
     sampleRate = newSampleRate;
 
-    const int size = std::max(1, regs.bufferSize);
-    leftBuffer.assign(size, 0);
-    rightBuffer.assign(size, 0);
+    // Allocate the worst-case ring once; preset changes only clear it.
+    leftBuffer.assign(maxBufferSize, 0);
+    rightBuffer.assign(maxBufferSize, 0);
+
+    // Pre-delay ring sized for the max pre-delay (200ms) at this rate.
+    preDelaySize = juce::jmax(1, (int)std::ceil(sampleRate * 0.2) + 1);
+    preDelayL.assign(preDelaySize, 0.0f);
+    preDelayR.assign(preDelaySize, 0.0f);
+
+    // Re-derive addresses for this sample rate (constructor used 44.1kHz default).
+    loadPreset(currentPresetName.toStdString());
 
     reset();
 }
@@ -38,6 +45,13 @@ void Reverb::reset()
     halfRatePhase = false;
     lastWetL = 0.0f;
     lastWetR = 0.0f;
+
+    std::fill(preDelayL.begin(), preDelayL.end(), 0.0f);
+    std::fill(preDelayR.begin(), preDelayR.end(), 0.0f);
+    preDelayPos = 0;
+
+    dampL = 0.0f;
+    dampR = 0.0f;
 }
 
 // Helpers for PS1 math
@@ -118,6 +132,9 @@ void Reverb::updateBufferSize()
     // this should never happen but just in case the regs are all negative or something
     if (regs.bufferSize < 1024)
         regs.bufferSize = 1024;
+
+    // The fixed ring must be able to contain every offset used by this preset.
+    jassert(regs.bufferSize <= maxBufferSize);
 }
 
 
@@ -162,17 +179,13 @@ void Reverb::updateBufferSize()
 void Reverb::loaderSpuRegs(const uint16_t preset[32])
 {
 
-     // bad hack to make half echo sound good
-    int addrScale = 4;
-    if (preset[0] == 23)
-    {
-        addrScale = 2;
-    }
+    // psx-spx register values are in units of 8 bytes (4 samples). At 44.1kHz
+    // we do 22050Hz and the scale is x4, at other host
+    // rates scale proportionally so the reverb time stays constant.
+    const int scale = addrScale();
 
-    
-
-    regs.dAPF1 = (int)preset[0] * addrScale;
-    regs.dAPF2 = (int)preset[1] * addrScale;
+    regs.dAPF1 = (int)preset[0] * scale;
+    regs.dAPF2 = (int)preset[1] * scale;
 
     regs.vIIR   = (int16_t)preset[2];
     regs.vCOMB1 = (int16_t)preset[3];
@@ -184,32 +197,32 @@ void Reverb::loaderSpuRegs(const uint16_t preset[32])
     regs.vAPF1 = (int16_t)preset[8];
     regs.vAPF2 = (int16_t)preset[9];
 
-    regs.mLSAME1 = (int)preset[10] * addrScale;
-    regs.mRSAME1 = (int)preset[11] * addrScale;
+    regs.mLSAME1 = (int)preset[10] * scale;
+    regs.mRSAME1 = (int)preset[11] * scale;
 
-    regs.mLCOMB1 = (int)preset[12] * addrScale;
-    regs.mRCOMB1 = (int)preset[13] * addrScale;
-    regs.mLCOMB2 = (int)preset[14] * addrScale;
-    regs.mRCOMB2 = (int)preset[15] * addrScale;
+    regs.mLCOMB1 = (int)preset[12] * scale;
+    regs.mRCOMB1 = (int)preset[13] * scale;
+    regs.mLCOMB2 = (int)preset[14] * scale;
+    regs.mRCOMB2 = (int)preset[15] * scale;
 
-    regs.mLSAME2 = (int)preset[16] * addrScale;
-    regs.mRSAME2 = (int)preset[17] * addrScale;
+    regs.mLSAME2 = (int)preset[16] * scale;
+    regs.mRSAME2 = (int)preset[17] * scale;
 
-    regs.mLDIFF1 = (int)preset[18] * addrScale;
-    regs.mRDIFF1 = (int)preset[19] * addrScale;
+    regs.mLDIFF1 = (int)preset[18] * scale;
+    regs.mRDIFF1 = (int)preset[19] * scale;
 
-    regs.mLCOMB3 = (int)preset[20] * addrScale;
-    regs.mRCOMB3 = (int)preset[21] * addrScale;
-    regs.mLCOMB4 = (int)preset[22] * addrScale;
-    regs.mRCOMB4 = (int)preset[23] * addrScale;
+    regs.mLCOMB3 = (int)preset[20] * scale;
+    regs.mRCOMB3 = (int)preset[21] * scale;
+    regs.mLCOMB4 = (int)preset[22] * scale;
+    regs.mRCOMB4 = (int)preset[23] * scale;
 
-    regs.mLDIFF2 = (int)preset[24] * addrScale;
-    regs.mRDIFF2 = (int)preset[25] * addrScale;
+    regs.mLDIFF2 = (int)preset[24] * scale;
+    regs.mRDIFF2 = (int)preset[25] * scale;
 
-    regs.mLAPF1 = (int)preset[26] * addrScale;
-    regs.mRAPF1 = (int)preset[27] * addrScale;
-    regs.mLAPF2 = (int)preset[28] * addrScale;
-    regs.mRAPF2 = (int)preset[29] * addrScale;
+    regs.mLAPF1 = (int)preset[26] * scale;
+    regs.mRAPF1 = (int)preset[27] * scale;
+    regs.mLAPF2 = (int)preset[28] * scale;
+    regs.mRAPF2 = (int)preset[29] * scale;
 
     regs.vLIN = (int16_t)preset[30];
     regs.vRIN = (int16_t)preset[31];
@@ -234,10 +247,56 @@ void Reverb::loaderSpuRegs(const uint16_t preset[32])
     updateBufferSize();
 }
 
+int Reverb::addrScale() const noexcept
+{
+    return juce::jmax(1, juce::roundToInt(4.0 * sampleRate / 44100.0));
+}
+
+void Reverb::setUserParams(const UserParams& p)
+{
+    params = p;
+
+    // Pre-delay length in samples (host rate), clamped to the ring.
+    preDelaySamples = juce::jlimit(0, juce::jmax(0, preDelaySize - 1),
+                                   (int)std::lround(params.preDelayMs * 0.001 * sampleRate));
+}
+
+Reverb::RegReadout Reverb::getRegisterReadout() const noexcept
+{
+    RegReadout r;
+    r.name   = currentPresetName;
+    r.vIIR   = regs.vIIR;   r.vWALL  = regs.vWALL;
+    r.vCOMB1 = regs.vCOMB1; r.vCOMB2 = regs.vCOMB2;
+    r.vCOMB3 = regs.vCOMB3; r.vCOMB4 = regs.vCOMB4;
+    r.vAPF1  = regs.vAPF1;  r.vAPF2  = regs.vAPF2;
+    r.vLIN   = regs.vLIN;   r.vRIN   = regs.vRIN;
+    r.vLOUT  = regs.vLOUT;  r.vROUT  = regs.vROUT;
+
+    r.dAPF1   = regs.dAPF1;   r.dAPF2   = regs.dAPF2;
+    r.mLSAME1 = regs.mLSAME1; r.mRSAME1 = regs.mRSAME1;
+    r.mLDIFF1 = regs.mLDIFF1; r.mRDIFF1 = regs.mRDIFF1;
+    r.mLCOMB1 = regs.mLCOMB1; r.mLCOMB2 = regs.mLCOMB2;
+    r.mLCOMB3 = regs.mLCOMB3; r.mLCOMB4 = regs.mLCOMB4;
+    r.mLAPF1  = regs.mLAPF1;  r.mLAPF2  = regs.mLAPF2;
+
+    r.coreRate = sampleRate * 0.5; // core runs at half the host rate
+    return r;
+}
+
 // Processing
 
 void Reverb::processStereo(float& leftIn, float& rightIn, float& leftOut, float& rightOut)
 {
+    // Pre-delay (runs at host rate): store input, read the delayed copy that
+    // feeds the reverb. At 0ms this reads back the just-written sample (no-op).
+    preDelayL[preDelayPos] = leftIn;
+    preDelayR[preDelayPos] = rightIn;
+    int rp = preDelayPos - preDelaySamples;
+    if (rp < 0) rp += preDelaySize;
+    const float pdInL = preDelayL[rp];
+    const float pdInR = preDelayR[rp];
+    preDelayPos = (preDelayPos + 1) % preDelaySize;
+
     // Run the reverb core every other sample (PS1 reverb runs at 22050Hz when SPU runs at 44100Hz)
     halfRatePhase = !halfRatePhase;
 
@@ -246,40 +305,50 @@ void Reverb::processStereo(float& leftIn, float& rightIn, float& leftOut, float&
 
     if (halfRatePhase)
     {
-        
-        const int16_t inL = floatToS16(leftIn);
-        const int16_t inR = floatToS16(rightIn);
+        const int16_t inL = floatToS16(pdInL * params.inGain);
+        const int16_t inR = floatToS16(pdInR * params.inGain);
         const int16_t Lin = mulQ15(inL, regs.vLIN);
         const int16_t Rin = mulQ15(inR, regs.vRIN);
 
         // same side reflections
         {
             const int16_t l1 = readBufferS16(leftBuffer, regs.mLSAME2);
-            const int16_t l2 = readBufferS16(leftBuffer, regs.mLSAME1 - 2);
+            const int16_t l2 = readBufferS16(leftBuffer, regs.mLSAME1 - 1);
 
             const int16_t inSameL = (int16_t)clamp16((int32_t)Lin + (int32_t)mulQ15(l1, regs.vWALL));
-            const int16_t outSameL = iirQ15(inSameL, l2, regs.vIIR);
-            writeBufferS16(leftBuffer, regs.mLSAME1, outSameL);
+            int16_t outSameL = iirQ15(inSameL, l2, regs.vIIR);
 
             const int16_t r1 = readBufferS16(rightBuffer, regs.mRSAME2);
-            const int16_t r2 = readBufferS16(rightBuffer, regs.mRSAME1 - 2);
+            const int16_t r2 = readBufferS16(rightBuffer, regs.mRSAME1 - 1);
 
             const int16_t inSameR = (int16_t)clamp16((int32_t)Rin + (int32_t)mulQ15(r1, regs.vWALL));
-            const int16_t outSameR = iirQ15(inSameR, r2, regs.vIIR);
+            int16_t outSameR = iirQ15(inSameR, r2, regs.vIIR);
+
+            // HF damping: one-pole LPF, bypassed at 0
+            if (params.hfDamp > 0.0f)
+            {
+                const float a = 1.0f - 0.9f * params.hfDamp;
+                dampL += a * ((float)outSameL - dampL);
+                dampR += a * ((float)outSameR - dampR);
+                outSameL = (int16_t)clamp16((int32_t)std::lrintf(dampL));
+                outSameR = (int16_t)clamp16((int32_t)std::lrintf(dampR));
+            }
+
+            writeBufferS16(leftBuffer,  regs.mLSAME1, outSameL);
             writeBufferS16(rightBuffer, regs.mRSAME1, outSameR);
         }
 
         // diff side reflections
         {
             const int16_t r1 = readBufferS16(rightBuffer, regs.mRDIFF2);
-            const int16_t l2 = readBufferS16(leftBuffer, regs.mLDIFF1 - 2);
+            const int16_t l2 = readBufferS16(leftBuffer, regs.mLDIFF1 - 1);
 
             const int16_t inDiffL = (int16_t)clamp16((int32_t)Lin + (int32_t)mulQ15(r1, regs.vWALL));
             const int16_t outDiffL = iirQ15(inDiffL, l2, regs.vIIR);
             writeBufferS16(leftBuffer, regs.mLDIFF1, outDiffL);
 
             const int16_t l1 = readBufferS16(leftBuffer, regs.mLDIFF2);
-            const int16_t r2 = readBufferS16(rightBuffer, regs.mRDIFF1 - 2);
+            const int16_t r2 = readBufferS16(rightBuffer, regs.mRDIFF1 - 1);
 
             const int16_t inDiffR = (int16_t)clamp16((int32_t)Rin + (int32_t)mulQ15(l1, regs.vWALL));
             const int16_t outDiffR = iirQ15(inDiffR, r2, regs.vIIR);
@@ -341,8 +410,13 @@ void Reverb::processStereo(float& leftIn, float& rightIn, float& leftOut, float&
         bufferPos = (bufferPos + 1) % (int)leftBuffer.size();
     }
 
-    leftOut = wetL;
-    rightOut = wetR;
+    // Output gain + stereo width
+    const float oL = wetL * params.outGain;
+    const float oR = wetR * params.outGain;
+    const float mid  = 0.5f * (oL + oR);
+    const float side = 0.5f * (oL - oR) * params.width;
+    leftOut  = mid + side;
+    rightOut = mid - side;
 }
 
 
@@ -415,14 +489,8 @@ void Reverb::loadPreset(const std::string& presetName)
         0x0000, 0x0000, 0x1004, 0x1002, 0x0004, 0x0002, 0x8000, 0x8000
     };
 
-    const uint16_t offPreset[32] = {
-        0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
-        0x0000, 0x0000, 0x0001, 0x0001, 0x0001, 0x0001, 0x0001, 0x0001,
-        0x0000, 0x0000, 0x0001, 0x0001, 0x0001, 0x0001, 0x0001, 0x0001,
-        0x0000, 0x0000, 0x0001, 0x0001, 0x0001, 0x0001, 0x0000, 0x0000
-    };
-
     const uint16_t* preset = roomPreset;
+    currentPresetName = juce::String (presetName);
 
     if (presetName == "Room") preset = roomPreset;
     else if (presetName == "Studio Small") preset = studioSmallPreset;
@@ -433,15 +501,11 @@ void Reverb::loadPreset(const std::string& presetName)
     else if (presetName == "Space Echo") preset = spaceEchoPreset;
     else if (presetName == "Chaos Echo") preset = chaosEchoPreset;
     else if (presetName == "Delay") preset = delayPreset;
-    else if (presetName == "Off") preset = offPreset;
 
     loaderSpuRegs(preset);
 
-    // If already prepared, reallocate buffers to match new preset sizing
+    // Buffers are sized to the worst case in prepare(), so switching presets
+    // only needs to clear the existing ring (no audio-thread allocation).
     if (!leftBuffer.empty() && !rightBuffer.empty())
-    {
-        leftBuffer.assign(regs.bufferSize, 0);
-        rightBuffer.assign(regs.bufferSize, 0);
         reset();
-    }
 }
