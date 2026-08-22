@@ -3,16 +3,17 @@
 The PlayStation 1 SPU reverb as a VST3/AU plugin, in C++ with JUCE.
 
 Built from nocash's SPU notes,
-[reverb formula](https://problemkaputt.de/psxspx-spu-reverb-formula.htm) and
-[reverb examples](https://problemkaputt.de/psxspx-spu-reverb-examples.htm),
-also mirrored at
+[reverb formula](https://problemkaputt.de/psxspx-spu-reverb-formula.htm),
+[reverb examples](https://problemkaputt.de/psxspx-spu-reverb-examples.htm), and
 [psx-spx](https://psx-spx.consoledev.net/soundprocessingunitspu/).
 
 <img src="PS1Verb.png" alt="Ps1Verb" width="420">
 
+Additionally to the PS1 base reverb, this also allows you to mix the input and output levels, as well as stereo width, pre-delay, and dampening.
+
 ## Presets
 
-Taken directly from the SPU:
+Taken from the SPU registers:
 
 `Room`, `Studio Small`, `Studio Medium`, `Studio Large`, `Hall`,
 `Half Echo`, `Space Echo`, `Chaos Echo`, `Delay`
